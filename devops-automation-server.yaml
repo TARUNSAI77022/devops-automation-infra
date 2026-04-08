@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS CloudFormation Template to deploy a VPC, Public Subnet, Security Group, 
+  and an EC2 instance (Ubuntu 24.04 LTS) with Docker pre-installed in the ap-south-2 region.
+
+Parameters:
+  UbuntuAmiId:
+    Type: String
+    Default: 'ami-070e5bd3ff10324f8'
+    Description: AMI ID for Ubuntu 24.04 LTS in ap-south-2 (provided by user)
+
+
+
+
+
+Resources:
+  # ----------------------------------------------------------------------------
+  # Networking
+  # ----------------------------------------------------------------------------
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: 'devops-automation-vpc'
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-IGW'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: 'ap-south-2a'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'devops-automation-public-subnet'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet-RT'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # ----------------------------------------------------------------------------
+  # Security Group
+  # ----------------------------------------------------------------------------
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for ${AWS::StackName}'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow SSH'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow HTTP'
+        - IpProtocol: tcp
+          FromPort: 81
+          ToPort: 81
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow Port 81'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow HTTPS'
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow xyOps dashboard'
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow OpenClaw dashboard'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow all outbound traffic'
+      Tags:
+        - Key: Name
+          Value: 'devops-automation-sg'
+
+  # ----------------------------------------------------------------------------
+  # EC2 Instance
+  # ----------------------------------------------------------------------------
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: 't3.large'
+      ImageId: !Ref UbuntuAmiId
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 50
+            VolumeType: 'gp3'
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt update -y
+          apt install -y docker.io
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ubuntu
+      Tags:
+        - Key: Name
+          Value: 'devops-automation-server'
+
+# ------------------------------------------------------------------------------
+# Outputs
+# ------------------------------------------------------------------------------
+Outputs:
+  EC2PublicIP:
+    Description: 'Public IP of the deployed EC2 instance'
+    Value: !GetAtt MyEC2Instance.PublicIp
+  VPCId:
+    Description: 'ID of the newly created VPC'
+    Value: !Ref MyVPC
+  SubnetId:
+    Description: 'ID of the Public Subnet'
+    Value: !Ref PublicSubnet
+  SecurityGroupId:
+    Description: 'ID of the newly created Security Group'
+    Value: !Ref MySecurityGroup
