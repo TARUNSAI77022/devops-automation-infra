@@ -112,6 +112,16 @@ Resources:
           ToPort: 9090
           CidrIp: '0.0.0.0/0'
           Description: 'Allow OpenClaw dashboard'
+        - IpProtocol: tcp
+          FromPort: 5522
+          ToPort: 5522
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow xyOps communication'
+        - IpProtocol: tcp
+          FromPort: 5523
+          ToPort: 5523
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow xyOps communication'
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: '0.0.0.0/0'
@@ -140,11 +150,61 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          apt update -y
-          apt install -y docker.io
+          # Add Docker's official GPG key:
+          sudo apt update -y
+          sudo apt install -y ca-certificates curl
+          sudo install -m 0755 -d /etc/apt/keyrings
+          sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+          # Add the repository to Apt sources:
+          sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: $(. /etc/os-release && echo "${!UBUNTU_CODENAME:-$VERSION_CODENAME}")
+          Components: stable
+          Architectures: $(dpkg --print-architecture)
+          Signed-By: /etc/apt/keyrings/docker.asc
+          EOF
+
+          sudo apt update -y
+          sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
           systemctl enable docker
           systemctl start docker
           usermod -aG docker ubuntu
+
+          # Create directory structure for xyOps
+          mkdir -p /home/ubuntu/xyops/conf
+
+          # Create docker-compose.yml
+          cat << 'EOF' > /home/ubuntu/xyops/docker-compose.yml
+          services:
+            xyops:
+              image: ghcr.io/pixlcore/xyops:latest
+              container_name: xyops-server
+              init: true
+              restart: unless-stopped
+              environment:
+                XYOPS_xysat_local: "true"
+                TZ: Asia/Kolkata
+              volumes:
+                - xy-data:/opt/xyops/data
+                - /home/ubuntu/xyops/conf:/opt/xyops/conf
+                - /var/run/docker.sock:/var/run/docker.sock
+              ports:
+                - "5522:5522"
+                - "5523:5523"
+
+          volumes:
+            xy-data:
+          EOF
+
+          # Ensure the ubuntu user has appropriate permissions
+          chown -R ubuntu:ubuntu /home/ubuntu/xyops
+
+          # Start xyOps container using docker compose
+          cd /home/ubuntu/xyops
+          docker compose up -d
       Tags:
         - Key: Name
           Value: 'devops-automation-server'
